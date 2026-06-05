@@ -138,11 +138,10 @@
       balloonSpawnTime = Date.now();
     }
 
+    let lastValidCursor = { x: 0.5, y: 0.5 };
+
     function onResults(results) {
-      // 修正: 認識が外れてもスキップせず、直前の状態を維持するロジックに変更
-      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-        if (!isRunning) return;
-      } else {
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
         const lm = results.multiFaceLandmarks[0];
         const eyeX = 1 - (lm[159].x + lm[386].x) / 2;
         const eyeY = (lm[159].y + lm[386].y) / 2;
@@ -153,21 +152,23 @@
           if (baseSamples.length >= 60) {
             baseline = { x: baseSamples.reduce((a,b) => a+b.x, 0) / 60, y: baseSamples.reduce((a,b) => a+b.y, 0) / 60 };
             isCalibrating = false; isRunning = true; startTime = Date.now(); lastTime = Date.now();
-            const rCanvas = document.createElement('canvas');
-            rCanvas.width = canvas.width; rCanvas.height = canvas.height;
-            rCtx = rCanvas.getContext('2d');
-            recorder = new GazeRecorder(rCanvas); recorder.start();
             spawnBalloon();
             statusDisplay.classList.add('hidden');
           }
           return;
         }
 
-        cursor.x += ((0.5 + (eyeX - baseline.x) * 30) - cursor.x) * 0.15;
-        cursor.y += ((0.5 + (eyeY - baseline.y) * 30) - cursor.y) * 0.15;
+        // 認識できているときは新しい座標へ移動
+        lastValidCursor.x = 0.5 + (eyeX - baseline.x) * 30;
+        lastValidCursor.y = 0.5 + (eyeY - baseline.y) * 30;
       }
       
+      // 認識が途切れても、lastValidCursor を使って位置を維持しつつ滑らかに動かす
+      cursor.x += (lastValidCursor.x - cursor.x) * 0.1;
+      cursor.y += (lastValidCursor.y - cursor.y) * 0.1;
+      
       if (!isRunning) return;
+      
       gazePath.push({x: cursor.x * canvas.width, y: cursor.y * canvas.height});
       const currentArea = Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)));
       const now = Date.now();
@@ -226,5 +227,49 @@
     };
     draw();
   </script>
+  ```html
+<div id="recalib-btn" style="
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 60px;
+    height: 60px;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(5px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    touch-action: manipulation;
+">
+    <div style="width: 10px; height: 10px; background: rgba(255, 255, 255, 0.3); border-radius: 50%;"></div>
+</div>
+
+<script>
+    const btn = document.getElementById('recalib-btn');
+    
+    // タッチまたはクリックでキャリブレーション開始
+    const triggerRecalibration = () => {
+        // ここにWebGazerのキャリブレーション再開処理を入れる
+        if (typeof webgazer !== 'undefined') {
+            webgazer.clearData();
+            // 必要に応じてキャリブレーション画面を表示する関数を呼ぶ
+            // showCalibrationInterface(); 
+            console.log("Recalibration started");
+        }
+    };
+
+    btn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        triggerRecalibration();
+    });
+
+    btn.addEventListener('click', triggerRecalibration);
+</script>
+
+```
 </body>
 </html>
