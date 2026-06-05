@@ -249,25 +249,26 @@
 </div>
 
 <script>
-    const btn = document.getElementById('recalib-btn');
-    
-    // タッチまたはクリックでキャリブレーション開始
-    const triggerRecalibration = () => {
-        // ここにWebGazerのキャリブレーション再開処理を入れる
-        if (typeof webgazer !== 'undefined') {
-            webgazer.clearData();
-            // 必要に応じてキャリブレーション画面を表示する関数を呼ぶ
-            // showCalibrationInterface(); 
-            console.log("Recalibration started");
-        }
-    };
+    // --- 修正版：ボタンとキーボードの共通リセット処理 ---
+function resetCalibration() {
+    isCalibrating = true;
+    isRunning = false;
+    baseSamples = []; 
+    progressBar.style.width = "0%";
+    statusDisplay.classList.remove('hidden');
+    document.getElementById('status-text').innerText = "再キャリブレーション中...正面を見てください";
+}
 
-    btn.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        triggerRecalibration();
-    });
+const btn = document.getElementById('recalib-btn');
+btn.addEventListener('click', resetCalibration);
+btn.addEventListener('touchstart', (e) => { e.preventDefault(); resetCalibration(); });
 
-    btn.addEventListener('click', triggerRecalibration);
+// キーボードの 'c' キーでリセット
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'c' || e.key === 'C') {
+        resetCalibration();
+    }
+});
 </script>
 
 ```
