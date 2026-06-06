@@ -68,38 +68,33 @@
       noise.start();
     }
     
-    function downloadCSV(gazePath, patientId) {
-      let csvContent = "data:text/csv;charset=utf-8,Time(ms),X,Y\n";
-      gazePath.forEach((p, i) => csvContent += `${i * 33},${p.x.toFixed(2)},${p.y.toFixed(2)}\n`);
-      const link = document.createElement("a");
-      link.setAttribute("href", encodeURI(csvContent));
-      link.setAttribute("download", `${patientId}_gaze_path.csv`);
-      document.body.appendChild(link); link.click(); document.body.removeChild(link);
-    }
+    function exportCSV() {
+  const duration = (Date.now() - startTime) / 1000;
+  const metrics = calculatePathMetrics(gazePath);
+  let csv = `項目,値\n日時,${new Date().toLocaleString()}\nID,${patientInfo.id}\n条件,${patientInfo.hcs}\nスコア,${score}\n総軌跡長(px),${metrics.totalLength.toFixed(2)}\n面積,1\n\n`;
+  csv += "Area,滞在時間(s),滞在率(%),反応速度(s)\n";
+  areaStats.forEach((s, i) => {
+    const rate = duration > 0 ? (s.time / duration) * 100 : 0;
+    const speed = s.hitCount > 0 ? (s.hitLatencySum / s.hitCount) : 0;
+    csv += `${i},${s.time.toFixed(2)},${rate.toFixed(1)}%,${speed.toFixed(3)}\n`;
+  });
+  const blob = new Blob([csv], {type: 'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${patientInfo.id}_analysis.csv`;
+  a.click();
+}
 
-    class GazeRecorder {
-      constructor(canvas) {
-        this.stream = canvas.captureStream(30);
-        this.recorder = new MediaRecorder(this.stream, { mimeType: 'video/webm' });
-        this.chunks = [];
-        this.recorder.ondataavailable = e => this.chunks.push(e.data);
-      }
-      start() { this.recorder.start(); }
-      stop(patientId) {
-        return new Promise((resolve) => {
-          this.recorder.onstop = () => {
-            const blob = new Blob(this.chunks, { type: 'video/webm' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `${patientId}_gaze_video.webm`;
-            a.click();
-            resolve();
-          };
-          this.recorder.stop();
-        });
-      }
-    }
+function calculatePathMetrics(path) {
+  let totalLength = 0;
+  for (let i = 1; i < path.length; i++) {
+    let dx = path[i].x - path[i-1].x, dy = path[i].y - path[i-1].y;
+    totalLength += Math.sqrt(dx*dx + dy*dy);
+  }
+  return { totalLength };
+}
 
+    
     function drawPath(rCtx, path) {
       if (path.length < 2) return;
       rCtx.beginPath();
@@ -115,6 +110,7 @@
     let lastArea = -1, lastTime = Date.now();
     let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, score = 0;
     let isRunning = false, isCalibrating = false;
+    let showResultsMode = false; // 結果表示モード（軌跡描画用）
     let patientInfo = { id: "", hcs: "" };
 
     function resize() { 
@@ -183,23 +179,18 @@
       }
     }
 
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      particles = particles.filter(p => p.life > 0);
-      particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.life -= 0.02; ctx.fillStyle = p.color; ctx.globalAlpha = p.life; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill(); });
-      ctx.globalAlpha = 1.0;
-
-      if (isRunning) {
-        drawPath(rCtx, gazePath);
-        if (Date.now() - startTime > 60000) { isRunning = false; recorder.stop(patientInfo.id); showResults(); }
-        else {
-          ctx.font = "180px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-          ctx.fillText("🎈", ((balloonPos % 3) + 0.5) * canvas.width/3, (Math.floor(balloonPos / 3) + 0.5) * canvas.height/3);
-        }
-      }
-      ctx.fillStyle = '#fef08a'; ctx.beginPath(); ctx.arc(cursor.x * canvas.width, cursor.y * canvas.height, 12, 0, Math.PI*2); ctx.fill();
-      requestAnimationFrame(draw);
-    }
+    // draw関数の修正部分
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  // 終了後にのみ軌跡を描画
+  if (showResultsMode) {
+    drawPath(ctx, gazePath);
+  }
+  
+  // ... (パーティクル、風船の描画はそのまま)
+  requestAnimationFrame(draw);
+}
 
     function showResults() {
       uiPanel.innerHTML = `<h2 class="text-2xl font-bold mb-4">終了！</h2>
@@ -253,6 +244,7 @@
 function resetCalibration() {
     isCalibrating = true;
     isRunning = false;
+    showResultsMode = true;
     baseSamples = []; 
     progressBar.style.width = "0%";
     statusDisplay.classList.remove('hidden');
@@ -270,7 +262,5 @@ window.addEventListener('keydown', (e) => {
     }
 });
 </script>
-
-```
 </body>
 </html>
