@@ -1,4 +1,3 @@
-```html
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -9,7 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 </head>
-<body class="m-0 overflow-hidden font-sans w-screen h-screen bg-slate-700">
+<body class="m-0 overflow-hidden font-sans w-screen h-screen transition-colors duration-500 bg-sky-100" id="game-body">
 
   <script>
     const gazeCsvData = {
@@ -24,10 +23,10 @@
     };
   </script>
 
-  <div id="status-display" class="absolute top-10 w-full text-center text-2xl md:text-4xl font-bold text-white drop-shadow-lg z-50 hidden">
+  <div id="status-display" class="absolute top-10 w-full text-center text-2xl md:text-4xl font-bold text-slate-700 drop-shadow-lg z-50 hidden">
     <div id="status-text">キャリブレーション中...正面を見てください</div>
-    <div class="w-64 h-4 bg-white/30 rounded-full mx-auto mt-4 overflow-hidden">
-      <div id="progress-bar" class="h-full bg-white w-0 transition-all duration-100"></div>
+    <div class="w-64 h-4 bg-slate-200 rounded-full mx-auto mt-4 overflow-hidden">
+      <div id="progress-bar" class="h-full bg-emerald-400 w-0 transition-all duration-100"></div>
     </div>
   </div>
 
@@ -45,13 +44,14 @@
         <option value="60">60度</option>
       </select>
     </div>
-    <button id="btn-start" class="w-full bg-slate-600 py-3 rounded-xl text-white font-bold hover:bg-slate-700 transition-all shadow-lg">ゲームを開始</button>
+    <button id="btn-start" class="w-full bg-emerald-500 py-3 rounded-xl text-white font-bold hover:bg-emerald-600 transition-all shadow-lg">ゲームを開始</button>
   </div>
 
   <canvas id="app-canvas" class="block w-full h-full cursor-pointer"></canvas>
 
   <script>
     const canvas = document.getElementById('app-canvas');
+    const body = document.getElementById('game-body');
     const ctx = canvas.getContext('2d');
     const uiPanel = document.getElementById('ui-panel');
     const statusDisplay = document.getElementById('status-display');
@@ -60,6 +60,8 @@
     const CALIBRATION_SAMPLES = 60;
     
     let audioCtx = null;
+    let bgmGain = null;
+    let sfxGain = null;
     let gazePath = [];
     let recorder = null;
     let rCtx = null;
@@ -70,7 +72,7 @@
     let cursor = { x: 0.5, y: 0.5 }, baseline = null;
     let baseSamples = [], particles = [];
     let lastTime = Date.now();
-    let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, score = 0;
+    let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, score = 0, combo = 0;
     let isRunning = false, isCalibrating = false;
 
     function startRecalibration() {
@@ -86,24 +88,52 @@
     canvas.addEventListener('click', startRecalibration);
 
     function initAudio() {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          bgmGain = audioCtx.createGain();
+          sfxGain = audioCtx.createGain();
+          
+          bgmGain.gain.value = 0.15;
+          sfxGain.gain.value = 0.05;
+          
+          bgmGain.connect(audioCtx.destination);
+          sfxGain.connect(audioCtx.destination);
+      }
       if (audioCtx.state === 'suspended') audioCtx.resume();
     }
 
-    function playRealPopSound() {
+    function playBGM() {
+        const melody = [523.25, 659.25, 783.99, 659.25, 880.00, 783.99, 659.25, 523.25];
+        let noteIndex = 0;
+        setInterval(() => {
+            if (!isRunning) return;
+            const osc = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            osc.frequency.value = melody[noteIndex % melody.length];
+            osc.type = 'sine';
+            g.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3);
+            osc.connect(g); g.connect(bgmGain);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+            noteIndex++;
+        }, 400);
+    }
+
+    function playPopSound(comboCount) {
       initAudio();
-      const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.2, audioCtx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < buffer.length; i++) data[i] = Math.random() * 2 - 1;
-      const noise = audioCtx.createBufferSource();
-      noise.buffer = buffer;
-      const filter = audioCtx.createBiquadFilter();
-      filter.type = 'highpass'; filter.frequency.value = 500;
+      const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
+      
+      const freq = 300 + (Math.min(comboCount, 10) * 80);
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      osc.type = 'sine';
+      
       gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
-      noise.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
-      noise.start();
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+      
+      osc.connect(gain);
+      gain.connect(sfxGain);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.3);
     }
     
     function downloadCSV() {
@@ -162,7 +192,7 @@
     function drawPath(rCtx, path) {
       if (path.length < 2) return;
       rCtx.beginPath();
-      rCtx.strokeStyle = "#00FF00";
+      rCtx.strokeStyle = "#10b981";
       rCtx.lineWidth = 4;
       path.forEach((p, i) => i === 0 ? rCtx.moveTo(p.x, p.y) : rCtx.lineTo(p.x, p.y));
       rCtx.stroke();
@@ -174,16 +204,26 @@
 
     function spawnBalloon(triggerEffect = false) {
       if (triggerEffect && balloonPos !== -1) {
-        playRealPopSound(); 
+        playPopSound(combo);
         const originX = ((balloonPos % 3) + 0.5) * canvas.width/3;
         const originY = (Math.floor(balloonPos / 3) + 0.5) * canvas.height/3;
-        for (let i = 0; i < 20; i++) {
-          const angle = Math.random() * Math.PI * 2, speed = Math.random() * 5 + 2;
-          particles.push({ x: originX, y: originY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 1.0, color: `hsl(${Math.random() * 60 + 30}, 100%, 60%)` });
+        const count = combo >= 10 ? 80 : 30; // 10以上の時エフェクト強化
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2, speed = Math.random() * (combo >= 10 ? 15 : 6) + 2;
+          // コンボ10以上で派手なビビッドカラーを採用
+          const hue = combo >= 10 ? (Math.random() * 360) : (combo * 20 + 180);
+          particles.push({ x: originX, y: originY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 1.0, color: `hsl(${hue}, 90%, 60%)` });
         }
       }
       balloonPos = Math.floor(Math.random() * 9);
       balloonSpawnTime = Date.now();
+      updateBackgroundColor();
+    }
+
+    function updateBackgroundColor() {
+        if (combo >= 10) body.className = "m-0 overflow-hidden font-sans w-screen h-screen transition-colors duration-500 bg-rose-50";
+        else if (combo >= 5) body.className = "m-0 overflow-hidden font-sans w-screen h-screen transition-colors duration-500 bg-amber-50";
+        else body.className = "m-0 overflow-hidden font-sans w-screen h-screen transition-colors duration-500 bg-sky-100";
     }
 
     function onResults(results) {
@@ -206,6 +246,7 @@
                 rCtx = rCanvas.getContext('2d');
                 recorder = new GazeRecorder(rCanvas); recorder.start();
             }
+            playBGM(); 
             spawnBalloon();
             statusDisplay.classList.add('hidden');
         }
@@ -223,16 +264,19 @@
       }
       gazePath.push(newPos);
       
-      if (balloonPos !== -1 && (Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)))) === balloonPos) {
-        score++;
+      const pos = Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)));
+      if (balloonPos !== -1 && pos === balloonPos) {
+        score++; combo++;
         spawnBalloon(true);
+      } else if (Date.now() - balloonSpawnTime > 2000) {
+        if (combo > 0) { combo = 0; updateBackgroundColor(); }
       }
     }
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       particles = particles.filter(p => p.life > 0);
-      particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.life -= 0.02; ctx.fillStyle = p.color; ctx.globalAlpha = p.life; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill(); });
+      particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.life -= 0.02; ctx.fillStyle = p.color; ctx.globalAlpha = p.life; ctx.beginPath(); ctx.arc(p.x, p.y, combo >= 10 ? 10 : 4, 0, Math.PI * 2); ctx.fill(); });
       ctx.globalAlpha = 1.0;
 
       if (isRunning) {
@@ -245,22 +289,30 @@
           ctx.font = "180px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
           ctx.fillText("🎈", ((balloonPos % 3) + 0.5) * canvas.width/3, (Math.floor(balloonPos / 3) + 0.5) * canvas.height/3);
           
-          ctx.fillStyle = "white"; ctx.font = "32px sans-serif"; ctx.textAlign = "left";
+          ctx.fillStyle = "#334155";
+          ctx.font = "32px sans-serif"; ctx.textAlign = "left";
           ctx.fillText(`スコア: ${score}`, 20, 40);
+          ctx.fillText(`コンボ: ${combo}`, 20, 80);
           ctx.textAlign = "right";
           ctx.fillText(`残り時間: ${timeLeft}秒`, canvas.width - 20, 40);
         }
       }
-      ctx.fillStyle = '#fef08a'; ctx.beginPath(); ctx.arc(cursor.x * canvas.width, cursor.y * canvas.height, 12, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#10b981';
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(cursor.x * canvas.width, cursor.y * canvas.height, 12, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
       requestAnimationFrame(draw);
     }
 
     function showResults() {
       uiPanel.innerHTML = `<h2 class="text-2xl font-bold mb-4">計測終了</h2>
       <p class="mb-4">最終スコア: ${score}</p>
-      <button onclick="downloadCSV()" class="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold mb-2">CSV保存</button>
-      <button onclick="downloadVideo()" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold mb-2">動画データ出力</button>
-      <button onclick="location.reload()" class="w-full bg-slate-400 text-white py-3 rounded-xl font-bold">リセット</button>`;
+      <button onclick="downloadCSV()" class="w-full bg-emerald-500 text-white py-3 rounded-xl font-bold mb-2">CSV保存</button>
+      <button onclick="downloadVideo()" class="w-full bg-sky-500 text-white py-3 rounded-xl font-bold mb-2">動画データ出力</button>
+      <button onclick="location.reload()" class="w-full bg-slate-300 text-slate-800 py-3 rounded-xl font-bold">リセット</button>`;
       uiPanel.classList.remove('hidden');
     }
 
