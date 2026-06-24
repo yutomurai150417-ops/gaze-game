@@ -1,10 +1,9 @@
-```html
 <!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>風船視線ゲーム 修正版</title>
+  <title>風船視線ゲーム 研究用</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
@@ -24,16 +23,18 @@
       <label class="block text-xs md:text-sm font-bold text-gray-700 mb-1">症例ID</label>
       <input type="text" id="patient-id" class="w-full border-2 border-slate-200 rounded-lg p-2 mb-4 focus:border-slate-500 outline-none" placeholder="例: P001">
       
-      <label class="block text-xs md:text-sm font-bold text-gray-700 mb-2">装着条件</label>
-      <div class="flex gap-4 text-sm">
-        <label class="flex items-center"><input type="radio" name="hcs" value="HCSあり" checked class="mr-2">HCSあり</label>
-        <label class="flex items-center"><input type="radio" name="hcs" value="HCSなし" class="mr-2">HCSなし</label>
-      </div>
+      <label class="block text-xs md:text-sm font-bold text-gray-700 mb-2">リクライニング角度</label>
+      <select id="angle-select" class="w-full border-2 border-slate-200 rounded-lg p-2 mb-4">
+        <option value="0">0度 (基準)</option>
+        <option value="40">40度</option>
+        <option value="50">50度</option>
+        <option value="60">60度</option>
+      </select>
     </div>
     <button id="btn-start" class="w-full bg-slate-600 py-3 rounded-xl text-white font-bold hover:bg-slate-700 transition-all shadow-lg">ゲームを開始</button>
   </div>
 
-  <canvas id="app-canvas" class="block w-full h-full"></canvas>
+  <canvas id="app-canvas" class="block w-full h-full cursor-pointer"></canvas>
 
   <script>
     const canvas = document.getElementById('app-canvas');
@@ -42,10 +43,35 @@
     const statusDisplay = document.getElementById('status-display');
     const progressBar = document.getElementById('progress-bar');
     
+    const CALIBRATION_SAMPLES = 60;
+    
     let audioCtx = null;
     let gazePath = [];
     let recorder = null;
-    let rCtx = null; 
+    let rCtx = null;
+    let finalStats = null;
+    let patientInfo = { id: "", angle: "" };
+    let totalDuration = 0; 
+
+    let cursor = { x: 0.5, y: 0.5 }, baseline = null;
+    let baseSamples = [], particles = [];
+    let areaStats = Array.from({length: 9}, () => ({ hitLatencySum: 0, hitCount: 0, visited: false, duration: 0 }));
+    let lastTime = Date.now();
+    let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, score = 0;
+    let isRunning = false, isCalibrating = false;
+
+    // 再キャリブレーション処理の改善
+    function startRecalibration() {
+        if (isCalibrating) return;
+        isCalibrating = true;
+        isRunning = false;
+        baseSamples = [];
+        cursor = { x: 0.5, y: 0.5 };
+        progressBar.style.width = "0%";
+        statusDisplay.classList.remove('hidden');
+    }
+
+    canvas.addEventListener('click', startRecalibration);
 
     function initAudio() {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -68,33 +94,51 @@
       noise.start();
     }
     
-    function exportCSV() {
-  const duration = (Date.now() - startTime) / 1000;
-  const metrics = calculatePathMetrics(gazePath);
-  let csv = `項目,値\n日時,${new Date().toLocaleString()}\nID,${patientInfo.id}\n条件,${patientInfo.hcs}\nスコア,${score}\n総軌跡長(px),${metrics.totalLength.toFixed(2)}\n面積,1\n\n`;
-  csv += "Area,滞在時間(s),滞在率(%),反応速度(s)\n";
-  areaStats.forEach((s, i) => {
-    const rate = duration > 0 ? (s.time / duration) * 100 : 0;
-    const speed = s.hitCount > 0 ? (s.hitLatencySum / s.hitCount) : 0;
-    csv += `${i},${s.time.toFixed(2)},${rate.toFixed(1)}%,${speed.toFixed(3)}\n`;
-  });
-  const blob = new Blob([csv], {type: 'text/csv'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${patientInfo.id}_analysis.csv`;
-  a.click();
-}
+    function downloadCSV() {
+      if (!finalStats) return;
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()} ${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
+      
+      let csvContent = "日付,症例ID,リクライニング角度,ターゲット選択回数,キャリブレーションフレーム数\n";
+      csvContent += `${dateStr},${patientInfo.id},${patientInfo.angle},${score},${CALIBRATION_SAMPLES}\n\n`;
+      csvContent += "区間ID,滞在時間(秒),平均反応速度(秒)\n";
+      
+      finalStats.latencies.forEach((lat, i) => {
+        const dur = areaStats[i].duration / 1000;
+        csvContent += `${i},${dur.toFixed(2)},${lat > 0 ? (lat/1000).toFixed(3) : "0.000"}\n`;
+      });
 
-function calculatePathMetrics(path) {
-  let totalLength = 0;
-  for (let i = 1; i < path.length; i++) {
-    let dx = path[i].x - path[i-1].x, dy = path[i].y - path[i-1].y;
-    totalLength += Math.sqrt(dx*dx + dy*dy);
-  }
-  return { totalLength };
-}
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${patientInfo.id}_angle${patientInfo.angle}_stats.csv`;
+      link.click();
+    }
 
-    
+    class GazeRecorder {
+      constructor(canvas) {
+        this.stream = canvas.captureStream(30);
+        this.recorder = new MediaRecorder(this.stream, { mimeType: 'video/webm' });
+        this.chunks = [];
+        this.recorder.ondataavailable = e => this.chunks.push(e.data);
+      }
+      start() { this.recorder.start(); }
+      stop(patientId, angle) {
+        return new Promise((resolve) => {
+          this.recorder.onstop = () => {
+            const blob = new Blob(this.chunks, { type: 'video/webm' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `${patientId}_angle${angle}_gaze.webm`;
+            a.click();
+            resolve();
+          };
+          this.recorder.stop();
+        });
+      }
+    }
+
     function drawPath(rCtx, path) {
       if (path.length < 2) return;
       rCtx.beginPath();
@@ -104,19 +148,7 @@ function calculatePathMetrics(path) {
       rCtx.stroke();
     }
 
-    let cursor = { x: 0.5, y: 0.5 }, baseline = null;
-    let baseSamples = [], particles = [];
-    let areaStats = Array.from({length: 9}, () => ({ time: 0, hitLatencySum: 0, hitCount: 0 }));
-    let lastArea = -1, lastTime = Date.now();
-    let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, score = 0;
-    let isRunning = false, isCalibrating = false;
-    let showResultsMode = false; // 結果表示モード（軌跡描画用）
-    let patientInfo = { id: "", hcs: "" };
-
-    function resize() { 
-        canvas.width = window.innerWidth; 
-        canvas.height = window.innerHeight; 
-    }
+    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
     window.addEventListener('resize', resize);
     resize();
 
@@ -134,76 +166,81 @@ function calculatePathMetrics(path) {
       balloonSpawnTime = Date.now();
     }
 
-    let lastValidCursor = { x: 0.5, y: 0.5 };
-
     function onResults(results) {
-      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        const lm = results.multiFaceLandmarks[0];
-        const eyeX = 1 - (lm[159].x + lm[386].x) / 2;
-        const eyeY = (lm[159].y + lm[386].y) / 2;
+      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) return;
+      const lm = results.multiFaceLandmarks[0];
+      const eyeX = 1 - (lm[159].x + lm[386].x) / 2;
+      const eyeY = (lm[159].y + lm[386].y) / 2;
 
-        if (isCalibrating) {
-          baseSamples.push({x: eyeX, y: eyeY});
-          progressBar.style.width = (baseSamples.length / 60) * 100 + "%";
-          if (baseSamples.length >= 60) {
-            baseline = { x: baseSamples.reduce((a,b) => a+b.x, 0) / 60, y: baseSamples.reduce((a,b) => a+b.y, 0) / 60 };
+      if (isCalibrating) {
+        baseSamples.push({x: eyeX, y: eyeY});
+        progressBar.style.width = (baseSamples.length / CALIBRATION_SAMPLES) * 100 + "%";
+        if (baseSamples.length >= CALIBRATION_SAMPLES) {
+            let sumX = 0, sumY = 0;
+            baseSamples.forEach(s => { sumX += s.x; sumY += s.y; });
+            baseline = { x: sumX / baseSamples.length, y: sumY / baseSamples.length };
             isCalibrating = false; isRunning = true; startTime = Date.now(); lastTime = Date.now();
+            if(!rCtx) {
+                const rCanvas = document.createElement('canvas');
+                rCanvas.width = canvas.width; rCanvas.height = canvas.height;
+                rCtx = rCanvas.getContext('2d');
+                recorder = new GazeRecorder(rCanvas); recorder.start();
+            }
             spawnBalloon();
             statusDisplay.classList.add('hidden');
-          }
-          return;
         }
-
-        // 認識できているときは新しい座標へ移動
-        lastValidCursor.x = 0.5 + (eyeX - baseline.x) * 30;
-        lastValidCursor.y = 0.5 + (eyeY - baseline.y) * 30;
+        return;
       }
-      
-      // 認識が途切れても、lastValidCursor を使って位置を維持しつつ滑らかに動かす
-      cursor.x += (lastValidCursor.x - cursor.x) * 0.1;
-      cursor.y += (lastValidCursor.y - cursor.y) * 0.1;
+
+      cursor.x += ((0.5 + (eyeX - baseline.x) * 30) - cursor.x) * 0.25;
+      cursor.y += ((0.5 + (eyeY - baseline.y) * 30) - cursor.y) * 0.25;
       
       if (!isRunning) return;
-      
+      const now = Date.now();
+      const dt = now - lastTime;
+      lastTime = now;
       gazePath.push({x: cursor.x * canvas.width, y: cursor.y * canvas.height});
       const currentArea = Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)));
-      const now = Date.now();
-      if (lastArea !== -1) areaStats[lastArea].time += (now - lastTime) / 1000;
-      lastTime = now; lastArea = currentArea;
+      areaStats[currentArea].duration += dt;
+      totalDuration += dt;
 
       if (balloonPos !== -1 && currentArea === balloonPos) {
-        areaStats[balloonPos].hitLatencySum += (Date.now() - balloonSpawnTime) / 1000;
+        areaStats[balloonPos].hitLatencySum += (Date.now() - balloonSpawnTime);
         areaStats[balloonPos].hitCount++;
         score++;
         spawnBalloon(true);
       }
     }
 
-    // draw関数の修正部分
-function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
-  // 終了後にのみ軌跡を描画
-  if (showResultsMode) {
-    drawPath(ctx, gazePath);
-  }
-  
-  // ... (パーティクル、風船の描画はそのまま)
-  requestAnimationFrame(draw);
-}
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particles = particles.filter(p => p.life > 0);
+      particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.life -= 0.02; ctx.fillStyle = p.color; ctx.globalAlpha = p.life; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill(); });
+      ctx.globalAlpha = 1.0;
+
+      if (isRunning) {
+        drawPath(rCtx, gazePath);
+        if (Date.now() - startTime > 60000) { isRunning = false; recorder.stop(patientInfo.id, patientInfo.angle); showResults(); }
+        else {
+          ctx.font = "180px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText("🎈", ((balloonPos % 3) + 0.5) * canvas.width/3, (Math.floor(balloonPos / 3) + 0.5) * canvas.height/3);
+        }
+      }
+      ctx.fillStyle = '#fef08a'; ctx.beginPath(); ctx.arc(cursor.x * canvas.width, cursor.y * canvas.height, 12, 0, Math.PI*2); ctx.fill();
+      requestAnimationFrame(draw);
+    }
 
     function showResults() {
-      uiPanel.innerHTML = `<h2 class="text-2xl font-bold mb-4">終了！</h2>
-                  <p class="mb-4">ターゲット選択回数: ${score}</p>
-                  <button onclick="downloadCSV(gazePath, patientInfo.id)" class="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold mb-2">CSVを保存</button>
-                  <p class="text-xs text-slate-400">※動画は自動的にダウンロードされます</p>`;
+      const latencies = areaStats.map(s => s.hitCount > 0 ? s.hitLatencySum / s.hitCount : 0);
+      finalStats = { score, latencies };
+      uiPanel.innerHTML = `<h2 class="text-2xl font-bold mb-4">計測終了</h2><button onclick="downloadCSV()" class="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold mb-2">CSV保存</button><button onclick="location.reload()" class="w-full bg-slate-400 text-white py-3 rounded-xl font-bold">リセット</button>`;
       uiPanel.classList.remove('hidden');
     }
 
     document.getElementById('btn-start').onclick = async () => {
       initAudio();
       patientInfo.id = document.getElementById('patient-id').value || "Unknown";
-      patientInfo.hcs = document.querySelector('input[name="hcs"]:checked').value;
+      patientInfo.angle = document.getElementById('angle-select').value;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({video: true});
         const video = document.createElement('video');
@@ -214,53 +251,11 @@ function draw() {
         const camera = new Camera(video, { onFrame: async () => await mesh.send({image: video}) });
         await camera.start();
         uiPanel.classList.add('hidden'); statusDisplay.classList.remove('hidden'); isCalibrating = true;
-      } catch (e) { alert("カメラ権限を許可してください"); }
+      } catch (e) { alert("カメラ権限を確認してください"); }
     };
     draw();
   </script>
-  ```html
-<div id="recalib-btn" style="
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    width: 60px;
-    height: 60px;
-    background: rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(5px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    touch-action: manipulation;
-">
-    <div style="width: 10px; height: 10px; background: rgba(255, 255, 255, 0.3); border-radius: 50%;"></div>
-</div>
-
-<script>
-    // --- 修正版：ボタンとキーボードの共通リセット処理 ---
-function resetCalibration() {
-    isCalibrating = true;
-    isRunning = false;
-    showResultsMode = true;
-    baseSamples = []; 
-    progressBar.style.width = "0%";
-    statusDisplay.classList.remove('hidden');
-    document.getElementById('status-text').innerText = "再キャリブレーション中...正面を見てください";
-}
-
-const btn = document.getElementById('recalib-btn');
-btn.addEventListener('click', resetCalibration);
-btn.addEventListener('touchstart', (e) => { e.preventDefault(); resetCalibration(); });
-
-// キーボードの 'c' キーでリセット
-window.addEventListener('keydown', (e) => {
-    if (e.key === 'c' || e.key === 'C') {
-        resetCalibration();
-    }
-});
-</script>
 </body>
 </html>
+
+```
