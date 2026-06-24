@@ -52,6 +52,7 @@
     let finalStats = null;
     let patientInfo = { id: "", angle: "" };
     let totalDuration = 0; 
+    let recordedVideoBlob = null; // 動画データ保持用
 
     let cursor = { x: 0.5, y: 0.5 }, baseline = null;
     let baseSamples = [], particles = [];
@@ -60,7 +61,6 @@
     let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, score = 0;
     let isRunning = false, isCalibrating = false;
 
-    // 再キャリブレーション処理の改善
     function startRecalibration() {
         if (isCalibrating) return;
         isCalibrating = true;
@@ -116,6 +116,14 @@
       link.click();
     }
 
+    function downloadVideo() {
+        if (!recordedVideoBlob) return;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(recordedVideoBlob);
+        a.download = `${patientInfo.id}_angle${patientInfo.angle}_gaze.webm`;
+        a.click();
+    }
+
     class GazeRecorder {
       constructor(canvas) {
         this.stream = canvas.captureStream(30);
@@ -124,14 +132,10 @@
         this.recorder.ondataavailable = e => this.chunks.push(e.data);
       }
       start() { this.recorder.start(); }
-      stop(patientId, angle) {
+      stop() {
         return new Promise((resolve) => {
           this.recorder.onstop = () => {
-            const blob = new Blob(this.chunks, { type: 'video/webm' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `${patientId}_angle${angle}_gaze.webm`;
-            a.click();
+            recordedVideoBlob = new Blob(this.chunks, { type: 'video/webm' });
             resolve();
           };
           this.recorder.stop();
@@ -220,7 +224,7 @@
 
       if (isRunning) {
         drawPath(rCtx, gazePath);
-        if (Date.now() - startTime > 60000) { isRunning = false; recorder.stop(patientInfo.id, patientInfo.angle); showResults(); }
+        if (Date.now() - startTime > 60000) { isRunning = false; recorder.stop().then(showResults); }
         else {
           ctx.font = "180px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
           ctx.fillText("🎈", ((balloonPos % 3) + 0.5) * canvas.width/3, (Math.floor(balloonPos / 3) + 0.5) * canvas.height/3);
@@ -233,7 +237,10 @@
     function showResults() {
       const latencies = areaStats.map(s => s.hitCount > 0 ? s.hitLatencySum / s.hitCount : 0);
       finalStats = { score, latencies };
-      uiPanel.innerHTML = `<h2 class="text-2xl font-bold mb-4">計測終了</h2><button onclick="downloadCSV()" class="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold mb-2">CSV保存</button><button onclick="location.reload()" class="w-full bg-slate-400 text-white py-3 rounded-xl font-bold">リセット</button>`;
+      uiPanel.innerHTML = `<h2 class="text-2xl font-bold mb-4">計測終了</h2>
+      <button onclick="downloadCSV()" class="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold mb-2">CSV保存</button>
+      <button onclick="downloadVideo()" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold mb-2">動画データ出力</button>
+      <button onclick="location.reload()" class="w-full bg-slate-400 text-white py-3 rounded-xl font-bold">リセット</button>`;
       uiPanel.classList.remove('hidden');
     }
 
