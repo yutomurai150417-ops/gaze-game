@@ -1,3 +1,4 @@
+```html
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -236,10 +237,18 @@
 
       if (isRunning) {
         drawPath(rCtx, gazePath);
-        if (Date.now() - startTime > 60000) { isRunning = false; recorder.stop().then(showResults); }
+        const elapsed = Date.now() - startTime;
+        const timeLeft = Math.max(0, 60 - Math.floor(elapsed / 1000));
+        
+        if (elapsed > 60000) { isRunning = false; recorder.stop().then(showResults); }
         else {
           ctx.font = "180px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
           ctx.fillText("🎈", ((balloonPos % 3) + 0.5) * canvas.width/3, (Math.floor(balloonPos / 3) + 0.5) * canvas.height/3);
+          
+          ctx.fillStyle = "white"; ctx.font = "32px sans-serif"; ctx.textAlign = "left";
+          ctx.fillText(`スコア: ${score}`, 20, 40);
+          ctx.textAlign = "right";
+          ctx.fillText(`残り時間: ${timeLeft}秒`, canvas.width - 20, 40);
         }
       }
       ctx.fillStyle = '#fef08a'; ctx.beginPath(); ctx.arc(cursor.x * canvas.width, cursor.y * canvas.height, 12, 0, Math.PI*2); ctx.fill();
@@ -248,6 +257,7 @@
 
     function showResults() {
       uiPanel.innerHTML = `<h2 class="text-2xl font-bold mb-4">計測終了</h2>
+      <p class="mb-4">最終スコア: ${score}</p>
       <button onclick="downloadCSV()" class="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold mb-2">CSV保存</button>
       <button onclick="downloadVideo()" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold mb-2">動画データ出力</button>
       <button onclick="location.reload()" class="w-full bg-slate-400 text-white py-3 rounded-xl font-bold">リセット</button>`;
