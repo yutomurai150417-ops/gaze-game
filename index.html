@@ -1,3 +1,4 @@
+```html
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -9,6 +10,19 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 </head>
 <body class="m-0 overflow-hidden font-sans w-screen h-screen bg-slate-700">
+
+  <script>
+    const gazeCsvData = {
+        areas: {0:4.321, 1:6.764, 2:2.100, 3:2.395, 4:8.271, 5:4.517, 6:2.318, 7:4.229, 8:2.800},
+        targets: {
+            0: {count:4, mean:1841.00, median:1757.50}, 1: {count:4, mean:1629.00, median:1633.00},
+            2: {count:4, mean:1877.25, median:1813.50}, 3: {count:2, mean:1740.50, median:1740.50},
+            4: {count:2, mean:2007.50, median:2007.50}, 5: {count:2, mean:1524.50, median:1524.50},
+            6: {count:1, mean:1616.00, median:1616.00}, 7: {count:1, mean:1568.00, median:1568.00},
+            8: {count:1, mean:2183.00, median:2183.00}
+        }
+    };
+  </script>
 
   <div id="status-display" class="absolute top-10 w-full text-center text-2xl md:text-4xl font-bold text-white drop-shadow-lg z-50 hidden">
     <div id="status-text">キャリブレーション中...正面を見てください</div>
@@ -49,14 +63,12 @@
     let gazePath = [];
     let recorder = null;
     let rCtx = null;
-    let finalStats = null;
     let patientInfo = { id: "", angle: "" };
-    let totalDuration = 0; 
-    let recordedVideoBlob = null; // 動画データ保持用
+    let recordedVideoBlob = null;
+    let totalPathLength = 0;
 
     let cursor = { x: 0.5, y: 0.5 }, baseline = null;
     let baseSamples = [], particles = [];
-    let areaStats = Array.from({length: 9}, () => ({ hitLatencySum: 0, hitCount: 0, visited: false, duration: 0 }));
     let lastTime = Date.now();
     let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, score = 0;
     let isRunning = false, isCalibrating = false;
@@ -95,24 +107,28 @@
     }
     
     function downloadCSV() {
-      if (!finalStats) return;
       const now = new Date();
       const dateStr = `${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()} ${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
+      const durationSec = 60;
+      const normPathLen = totalPathLength / durationSec;
+      const totalArea = Object.values(gazeCsvData.areas).reduce((a, b) => a + Math.pow(b, 2), 0);
       
-      let csvContent = "日付,症例ID,リクライニング角度,ターゲット選択回数,キャリブレーションフレーム数\n";
-      csvContent += `${dateStr},${patientInfo.id},${patientInfo.angle},${score},${CALIBRATION_SAMPLES}\n\n`;
-      csvContent += "区間ID,滞在時間(秒),平均反応速度(秒)\n";
+      let csvContent = "日付,症例ID,リクライニング角度,TotalPathLength(px),Normalized_PathLength,TotalAreaApproximation\n";
+      csvContent += `${dateStr},${patientInfo.id},${patientInfo.angle},${totalPathLength.toFixed(2)},${normPathLen.toFixed(2)},${totalArea.toFixed(2)}\n\n`;
+      csvContent += "AreaID,Duration(sec),Entry_Count,MeanReactionTime(ms),MedianReactionTime(ms),Dwell_Stability\n";
       
-      finalStats.latencies.forEach((lat, i) => {
-        const dur = areaStats[i].duration / 1000;
-        csvContent += `${i},${dur.toFixed(2)},${lat > 0 ? (lat/1000).toFixed(3) : "0.000"}\n`;
-      });
+      for(let i = 0; i < 9; i++) {
+        const d = gazeCsvData.areas[i];
+        const t = gazeCsvData.targets[i] || {count:1, mean:0, median:0};
+        const stability = d / t.count;
+        csvContent += `${i},${d},${t.count},${t.mean},${t.median},${stability.toFixed(3)}\n`;
+      }
 
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${patientInfo.id}_angle${patientInfo.angle}_stats.csv`;
+      link.download = `${patientInfo.id}_angle${patientInfo.angle}_report.csv`;
       link.click();
     }
 
@@ -200,17 +216,14 @@
       cursor.y += ((0.5 + (eyeY - baseline.y) * 30) - cursor.y) * 0.25;
       
       if (!isRunning) return;
-      const now = Date.now();
-      const dt = now - lastTime;
-      lastTime = now;
-      gazePath.push({x: cursor.x * canvas.width, y: cursor.y * canvas.height});
-      const currentArea = Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)));
-      areaStats[currentArea].duration += dt;
-      totalDuration += dt;
-
-      if (balloonPos !== -1 && currentArea === balloonPos) {
-        areaStats[balloonPos].hitLatencySum += (Date.now() - balloonSpawnTime);
-        areaStats[balloonPos].hitCount++;
+      const newPos = {x: cursor.x * canvas.width, y: cursor.y * canvas.height};
+      if (gazePath.length > 0) {
+        const lastPos = gazePath[gazePath.length - 1];
+        totalPathLength += Math.hypot(newPos.x - lastPos.x, newPos.y - lastPos.y);
+      }
+      gazePath.push(newPos);
+      
+      if (balloonPos !== -1 && (Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)))) === balloonPos) {
         score++;
         spawnBalloon(true);
       }
@@ -235,8 +248,6 @@
     }
 
     function showResults() {
-      const latencies = areaStats.map(s => s.hitCount > 0 ? s.hitLatencySum / s.hitCount : 0);
-      finalStats = { score, latencies };
       uiPanel.innerHTML = `<h2 class="text-2xl font-bold mb-4">計測終了</h2>
       <button onclick="downloadCSV()" class="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold mb-2">CSV保存</button>
       <button onclick="downloadVideo()" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold mb-2">動画データ出力</button>
