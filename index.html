@@ -62,6 +62,7 @@
     let audioCtx = null;
     let bgmGain = null;
     let sfxGain = null;
+    let bgmInterval = null;
     let gazePath = [];
     let recorder = null;
     let rCtx = null;
@@ -72,13 +73,14 @@
     let cursor = { x: 0.5, y: 0.5 }, baseline = null;
     let baseSamples = [], particles = [];
     let lastTime = Date.now();
-    let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, score = 0, combo = 0;
+    let balloonPos = -1, balloonSpawnTime = 0, startTime = 0, totalCalibrationTime = 0, calibrationStartTime = 0, score = 0, combo = 0;
     let isRunning = false, isCalibrating = false;
 
     function startRecalibration() {
         if (isCalibrating) return;
         isCalibrating = true;
         isRunning = false;
+        calibrationStartTime = Date.now();
         baseSamples = [];
         cursor = { x: 0.5, y: 0.5 };
         progressBar.style.width = "0%";
@@ -103,9 +105,10 @@
     }
 
     function playBGM() {
+        if (bgmInterval) clearInterval(bgmInterval);
         const melody = [523.25, 659.25, 783.99, 659.25, 880.00, 783.99, 659.25, 523.25];
         let noteIndex = 0;
-        setInterval(() => {
+        bgmInterval = setInterval(() => {
             if (!isRunning) return;
             const osc = audioCtx.createOscillator();
             const g = audioCtx.createGain();
@@ -207,10 +210,9 @@
         playPopSound(combo);
         const originX = ((balloonPos % 3) + 0.5) * canvas.width/3;
         const originY = (Math.floor(balloonPos / 3) + 0.5) * canvas.height/3;
-        const count = combo >= 10 ? 80 : 30; // 10以上の時エフェクト強化
+        const count = combo >= 10 ? 80 : 30; 
         for (let i = 0; i < count; i++) {
           const angle = Math.random() * Math.PI * 2, speed = Math.random() * (combo >= 10 ? 15 : 6) + 2;
-          // コンボ10以上で派手なビビッドカラーを採用
           const hue = combo >= 10 ? (Math.random() * 360) : (combo * 20 + 180);
           particles.push({ x: originX, y: originY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 1.0, color: `hsl(${hue}, 90%, 60%)` });
         }
@@ -239,7 +241,9 @@
             let sumX = 0, sumY = 0;
             baseSamples.forEach(s => { sumX += s.x; sumY += s.y; });
             baseline = { x: sumX / baseSamples.length, y: sumY / baseSamples.length };
-            isCalibrating = false; isRunning = true; startTime = Date.now(); lastTime = Date.now();
+            isCalibrating = false; isRunning = true; 
+            if (calibrationStartTime > 0) totalCalibrationTime += (Date.now() - calibrationStartTime);
+            lastTime = Date.now();
             if(!rCtx) {
                 const rCanvas = document.createElement('canvas');
                 rCanvas.width = canvas.width; rCanvas.height = canvas.height;
@@ -247,7 +251,7 @@
                 recorder = new GazeRecorder(rCanvas); recorder.start();
             }
             playBGM(); 
-            spawnBalloon();
+            if (balloonPos === -1) spawnBalloon();
             statusDisplay.classList.add('hidden');
         }
         return;
@@ -281,10 +285,14 @@
 
       if (isRunning) {
         drawPath(rCtx, gazePath);
-        const elapsed = Date.now() - startTime;
+        const elapsed = (Date.now() - startTime) - totalCalibrationTime;
         const timeLeft = Math.max(0, 60 - Math.floor(elapsed / 1000));
         
-        if (elapsed > 60000) { isRunning = false; recorder.stop().then(showResults); }
+        if (elapsed > 60000) { 
+            isRunning = false; 
+            if (bgmInterval) clearInterval(bgmInterval);
+            recorder.stop().then(showResults); 
+        }
         else {
           ctx.font = "180px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
           ctx.fillText("🎈", ((balloonPos % 3) + 0.5) * canvas.width/3, (Math.floor(balloonPos / 3) + 0.5) * canvas.height/3);
@@ -330,6 +338,8 @@
         const camera = new Camera(video, { onFrame: async () => await mesh.send({image: video}) });
         await camera.start();
         uiPanel.classList.add('hidden'); statusDisplay.classList.remove('hidden'); isCalibrating = true;
+        startTime = Date.now();
+        calibrationStartTime = startTime;
       } catch (e) { alert("カメラ権限を確認してください"); }
     };
     draw();
