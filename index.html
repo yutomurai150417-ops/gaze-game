@@ -11,14 +11,19 @@
 <body class="m-0 overflow-hidden font-sans w-screen h-screen transition-colors duration-500 bg-sky-100" id="game-body">
 
   <script>
+    // 基準となる初期データ。ゲーム開始時にカウントなどはリセット、または累積されるように処理を施します。
     const gazeCsvData = {
         areas: {0:4.321, 1:6.764, 2:2.100, 3:2.395, 4:8.271, 5:4.517, 6:2.318, 7:4.229, 8:2.800},
         targets: {
-            0: {count:4, mean:1841.00, median:1757.50}, 1: {count:4, mean:1629.00, median:1633.00},
-            2: {count:4, mean:1877.25, median:1813.50}, 3: {count:2, mean:1740.50, median:1740.50},
-            4: {count:2, mean:2007.50, median:2007.50}, 5: {count:2, mean:1524.50, median:1524.50},
-            6: {count:1, mean:1616.00, median:1616.00}, 7: {count:1, mean:1568.00, median:1568.00},
-            8: {count:1, mean:2183.00, median:2183.00}
+            0: {count:0, mean:0, median:0, times:[]}, 
+            1: {count:0, mean:0, median:0, times:[]},
+            2: {count:0, mean:0, median:0, times:[]}, 
+            3: {count:0, mean:0, median:0, times:[]},
+            4: {count:0, mean:0, median:0, times:[]}, 
+            5: {count:0, mean:0, median:0, times:[]},
+            6: {count:0, mean:0, median:0, times:[]}, 
+            7: {count:0, mean:0, median:0, times:[]},
+            8: {count:0, mean:0, median:0, times:[]}
         }
     };
   </script>
@@ -152,9 +157,9 @@
       
       for(let i = 0; i < 9; i++) {
         const d = gazeCsvData.areas[i];
-        const t = gazeCsvData.targets[i] || {count:1, mean:0, median:0};
-        const stability = d / t.count;
-        csvContent += `${i},${d},${t.count},${t.mean},${t.median},${stability.toFixed(3)}\n`;
+        const t = gazeCsvData.targets[i] || {count:0, mean:0, median:0};
+        const stability = t.count > 0 ? (d / t.count) : 0; // countが0の場合の除算エラー(Infinity)を防ぐ
+        csvContent += `${i},${d},${t.count},${t.mean.toFixed(2)},${t.median.toFixed(2)},${stability.toFixed(3)}\n`;
       }
 
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -270,6 +275,23 @@
       
       const pos = Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)));
       if (balloonPos !== -1 && pos === balloonPos) {
+        // --- 修正箇所：風船を獲得したエリア（balloonPos）のデータを追記・更新 ---
+        const reactionTime = Date.now() - balloonSpawnTime;
+        if (gazeCsvData.targets[balloonPos]) {
+          const target = gazeCsvData.targets[balloonPos];
+          target.count += 1;
+          target.times.push(reactionTime);
+          
+          // 平均値（Mean）の算出
+          const sum = target.times.reduce((a, b) => a + b, 0);
+          target.mean = sum / target.count;
+          
+          // 中央値（Median）の算出
+          const sorted = [...target.times].sort((a, b) => a - b);
+          const mid = Math.floor(sorted.length / 2);
+          target.median = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+        }
+        
         score++; combo++;
         spawnBalloon(true);
       } else if (Date.now() - balloonSpawnTime > 2000) {
