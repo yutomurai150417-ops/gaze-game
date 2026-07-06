@@ -13,7 +13,7 @@
   <script>
     // 基準となる初期データ。ゲーム開始時にカウントなどはリセット、または累積されるように処理を施します。
     const gazeCsvData = {
-        areas: {0:4.321, 1:6.764, 2:2.100, 3:2.395, 4:8.271, 5:4.517, 6:2.318, 7:4.229, 8:2.800},
+        areas: {0:0, 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0},
         targets: {
             0: {count:0, mean:0, median:0, times:[]}, 
             1: {count:0, mean:0, median:0, times:[]},
@@ -26,6 +26,14 @@
             8: {count:0, mean:0, median:0, times:[]}
         }
     };
+
+    // 新規ゲーム開始時のデータリセット用関数
+    function resetGazeData() {
+        for (let i = 0; i < 9; i++) {
+            gazeCsvData.areas[i] = 0;
+            gazeCsvData.targets[i] = {count: 0, mean: 0, median: 0, times: []};
+        }
+    }
   </script>
 
   <div id="status-display" class="absolute top-10 w-full text-center text-2xl md:text-4xl font-bold text-slate-700 drop-shadow-lg z-50 hidden">
@@ -159,7 +167,7 @@
         const d = gazeCsvData.areas[i];
         const t = gazeCsvData.targets[i] || {count:0, mean:0, median:0};
         const stability = t.count > 0 ? (d / t.count) : 0; // countが0の場合の除算エラー(Infinity)を防ぐ
-        csvContent += `${i},${d},${t.count},${t.mean.toFixed(2)},${t.median.toFixed(2)},${stability.toFixed(3)}\n`;
+        csvContent += `${i},${d.toFixed(3)},${t.count},${t.mean.toFixed(2)},${t.median.toFixed(2)},${stability.toFixed(3)}\n`;
       }
 
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -222,7 +230,13 @@
           particles.push({ x: originX, y: originY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 1.0, color: `hsl(${hue}, 90%, 60%)` });
         }
       }
-      balloonPos = Math.floor(Math.random() * 9);
+
+      // 【連続出現防止】直前のエリアとは必ず異なる新しいエリア(0〜8)を選択する
+      let nextPos = balloonPos;
+      while (nextPos === balloonPos || nextPos === -1) {
+        nextPos = Math.floor(Math.random() * 9);
+      }
+      balloonPos = nextPos;
       balloonSpawnTime = Date.now();
       updateBackgroundColor();
     }
@@ -275,7 +289,7 @@
       
       const pos = Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)));
       if (balloonPos !== -1 && pos === balloonPos) {
-        // --- 修正箇所：風船を獲得したエリア（balloonPos）のデータを追記・更新 ---
+        // --- 反応時間（Reaction Time）の算出・蓄積処理 ---
         const reactionTime = Date.now() - balloonSpawnTime;
         if (gazeCsvData.targets[balloonPos]) {
           const target = gazeCsvData.targets[balloonPos];
@@ -286,10 +300,14 @@
           const sum = target.times.reduce((a, b) => a + b, 0);
           target.mean = sum / target.count;
           
-          // 中央値（Median）の算出
-          const sorted = [...target.times].sort((a, b) => a - b);
-          const mid = Math.floor(sorted.length / 2);
-          target.median = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+          // 中央値（Median）の算出【timesが空でないときのみ計算、空なら0】
+          if (target.times.length > 0) {
+            const sorted = [...target.times].sort((a, b) => a - b);
+            const mid = Math.floor(sorted.length / 2);
+            target.median = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+          } else {
+            target.median = 0;
+          }
         }
         
         score++; combo++;
@@ -307,7 +325,19 @@
 
       if (isRunning) {
         drawPath(rCtx, gazePath);
-        const elapsed = (Date.now() - startTime) - totalCalibrationTime;
+        
+        // --- 滞在時間（Duration）のリアルタイム加算処理（drawループ内のみで一本化） ---
+        const now = Date.now();
+        const deltaTime = (now - lastTime) / 1000; // 秒単位
+        lastTime = now;
+
+        const currentArea = Math.floor(cursor.y * 3) * 3 + Math.min(2, Math.max(0, Math.floor(cursor.x * 3)));
+        if (currentArea >= 0 && currentArea < 9) {
+          gazeCsvData.areas[currentArea] += deltaTime;
+        }
+
+        // 時間計測は元通りのやり方（再キャリブレーションで時間が引き戻されない設計）に戻します
+        const elapsed = (now - startTime) - totalCalibrationTime;
         const timeLeft = Math.max(0, 60 - Math.floor(elapsed / 1000));
         
         if (elapsed > 60000) { 
@@ -326,6 +356,8 @@
           ctx.textAlign = "right";
           ctx.fillText(`残り時間: ${timeLeft}秒`, canvas.width - 20, 40);
         }
+      } else {
+        lastTime = Date.now();
       }
       ctx.fillStyle = '#10b981';
       ctx.strokeStyle = 'white';
@@ -347,6 +379,14 @@
     }
 
     document.getElementById('btn-start').onclick = async () => {
+      // 計測データをすべてクリーン初期化
+      resetGazeData();
+      score = 0;
+      combo = 0;
+      totalPathLength = 0;
+      gazePath = [];
+      totalCalibrationTime = 0;
+
       initAudio();
       patientInfo.id = document.getElementById('patient-id').value || "Unknown";
       patientInfo.angle = document.getElementById('angle-select').value;
@@ -362,6 +402,7 @@
         uiPanel.classList.add('hidden'); statusDisplay.classList.remove('hidden'); isCalibrating = true;
         startTime = Date.now();
         calibrationStartTime = startTime;
+        lastTime = Date.now();
       } catch (e) { alert("カメラ権限を確認してください"); }
     };
     draw();
@@ -369,4 +410,3 @@
 </body>
 </html>
 
-```
